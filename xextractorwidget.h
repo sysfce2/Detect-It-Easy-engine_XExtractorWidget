@@ -39,7 +39,10 @@ public:
     explicit XExtractorWidget(QWidget *pParent = nullptr);
     ~XExtractorWidget();
 
+    void setData(const XBinary::INDATA &inData, XInfoDB *pXInfoDB, const XExtractor::OPTIONS &options, bool bAuto = false);
     void setData(QIODevice *pDevice, XInfoDB *pXInfoDB, const XExtractor::OPTIONS &options, bool bAuto);
+    QIODevice *getDevice();
+    void setXInfoDB(XInfoDB *pXInfoDB);
     void reload();
     DumpProcess::RECORD getDumpProcessRecord(QModelIndex index);
     virtual void adjustView();
@@ -66,7 +69,7 @@ protected:
 
 private:
     Ui::XExtractorWidget *ui;
-    QIODevice *m_pDevice;
+    XBinary::INDATA m_inData;
     XInfoDB *m_pXInfoDB;
     XExtractor::OPTIONS m_options;
     XExtractor::DATA m_extractor_data;

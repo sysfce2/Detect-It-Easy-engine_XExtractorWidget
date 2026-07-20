@@ -41,26 +41,31 @@ XExtractorWidget::XExtractorWidget(QWidget *pParent) : XShortcutsWidget(pParent)
     ui->labelSize->setToolTip(tr("Size"));
     ui->comboBoxExtractorMode->setToolTip(tr("Mode"));
 
-    m_pDevice = nullptr;
+    m_inData = {};
     m_pXInfoDB = nullptr;
     m_options = {};
 }
 
 XExtractorWidget::~XExtractorWidget()
 {
+    ui->widgetHex->reset();
+    XFormats::removeDevice(m_inData.pDevice, m_inData);
     delete ui;
 }
 
-void XExtractorWidget::setData(QIODevice *pDevice, XInfoDB *pXInfoDB, const XExtractor::OPTIONS &options, bool bAuto)
+void XExtractorWidget::setData(const XBinary::INDATA &inData, XInfoDB *pXInfoDB, const XExtractor::OPTIONS &options, bool bAuto)
 {
-    m_pDevice = pDevice;
+    ui->widgetHex->reset();
+    XFormats::removeDevice(m_inData.pDevice, m_inData);
+    m_inData = inData;
+    m_inData.pDevice = XFormats::createDevice(inData);
     m_pXInfoDB = pXInfoDB;
     m_options = options;
 
     ui->checkBoxDeepScan->setChecked(options.bDeepScan);
     // ui->checkBoxHeuristicScan->setChecked(options.bHeuristicScan);
 
-    XBinary::FT fileType = XFormats::setFileTypeComboBox(options.fileType, m_pDevice, ui->comboBoxType);
+    XBinary::FT fileType = XFormats::setFileTypeComboBox(options.fileType, m_inData.pDevice, ui->comboBoxType);
     XFormats::getMapModesList(fileType, ui->comboBoxMapMode);
 
     bool bFormat = XExtractor::isFormatModeAvailable(fileType);
@@ -119,16 +124,34 @@ void XExtractorWidget::setData(QIODevice *pDevice, XInfoDB *pXInfoDB, const XExt
 
     XBinaryView::OPTIONS hex_options = {};
 
-    ui->widgetHex->setData(pDevice, hex_options, true, m_pXInfoDB);
+    ui->widgetHex->setData(m_inData.pDevice, hex_options, true, m_pXInfoDB);
 
     if (bAuto) {
         reload();
     }
 }
 
+void XExtractorWidget::setData(QIODevice *pDevice, XInfoDB *pXInfoDB, const XExtractor::OPTIONS &options, bool bAuto)
+{
+    setData(XFormats::createINDATA(options.fileType, pDevice), pXInfoDB, options, bAuto);
+}
+
+QIODevice *XExtractorWidget::getDevice()
+{
+    return m_inData.pDevice;
+}
+
+void XExtractorWidget::setXInfoDB(XInfoDB *pXInfoDB)
+{
+    m_pXInfoDB = pXInfoDB;
+    ui->widgetHex->setXInfoDB(pXInfoDB);
+}
+
 void XExtractorWidget::reload()
 {
-    ui->labelSize->setText(XBinary::valueToHexEx(m_pDevice->size()));
+    if (!m_inData.pDevice) return;
+
+    ui->labelSize->setText(XBinary::valueToHexEx(m_inData.pDevice->size()));
 
     m_extractor_data = {};
 
@@ -147,12 +170,12 @@ void XExtractorWidget::reload()
     // extractor_data.options.bHeuristicScan = ui->checkBoxHeuristicScan->isChecked();
 
     m_extractor_data.memoryMap = XFormats::getMemoryMap((XBinary::FT)(ui->comboBoxType->currentData().toULongLong()),
-                                                        (XBinary::MAPMODE)(ui->comboBoxMapMode->currentData().toULongLong()), m_pDevice, false, -1);
+                                                        (XBinary::MAPMODE)(ui->comboBoxMapMode->currentData().toULongLong()), m_inData.pDevice, false, -1);
 
     XExtractor xextractor;
     XDialogProcess dep(XOptions::getMainWidget(this), &xextractor);
     dep.setGlobal(getShortcuts(), getGlobalOptions());
-    xextractor.setData(m_pDevice, &m_extractor_data, dep.getPdStruct());
+    xextractor.setData(m_inData.pDevice, &m_extractor_data, dep.getPdStruct());
     dep.start();
     dep.showDialogDelay();
 
@@ -207,7 +230,7 @@ DumpProcess::RECORD XExtractorWidget::getDumpProcessRecord(QModelIndex index)
 
     QString sName = QString("%1_%2").arg(XBinary::valueToHexEx(result.nOffset)).arg(XBinary::valueToHexEx(result.nSize));
 
-    result.sFileName = XBinary::getResultFileName(m_pDevice, QString("%1.%2").arg(sName).arg(sExt));
+    result.sFileName = XBinary::getResultFileName(m_inData.pDevice, QString("%1.%2").arg(sName).arg(sExt));
 
     return result;
 }
@@ -247,12 +270,12 @@ void XExtractorWidget::on_toolButtonScan_clicked()
 
 void XExtractorWidget::on_toolButtonSave_clicked()
 {
-    XShortcutsWidget::saveTableModel(ui->tableViewResult->getProxyModel(), XBinary::getResultFileName(m_pDevice, QString("%1.txt").arg(tr("Extract"))));
+    XShortcutsWidget::saveTableModel(ui->tableViewResult->getProxyModel(), XBinary::getResultFileName(m_inData.pDevice, QString("%1.txt").arg(tr("Extract"))));
 }
 
 void XExtractorWidget::on_toolButtonDumpAll_clicked()
 {
-    QString sDirectory = QFileDialog::getExistingDirectory(this, tr("Dump all"), XBinary::getDeviceDirectory(m_pDevice));
+    QString sDirectory = QFileDialog::getExistingDirectory(this, tr("Dump all"), XBinary::getDeviceDirectory(m_inData.pDevice));
 
     if (!sDirectory.isEmpty()) {
         qint32 nNumberOfRecords = ui->tableViewResult->model()->rowCount();
@@ -270,12 +293,12 @@ void XExtractorWidget::on_toolButtonDumpAll_clicked()
                 listRecords.append(record);
             }
 
-            QString sJsonFileName = sDirectory + QDir::separator() + XBinary::getDeviceFileBaseName(m_pDevice) + ".patch.json";
+            QString sJsonFileName = sDirectory + QDir::separator() + XBinary::getDeviceFileBaseName(m_inData.pDevice) + ".patch.json";
 
             DumpProcess dumpProcess;
             XDialogProcess dd(this, &dumpProcess);
             dd.setGlobal(getShortcuts(), getGlobalOptions());
-            dumpProcess.setData(m_pDevice, listRecords, DumpProcess::DT_DUMP_DEVICE_OFFSET, sJsonFileName, dd.getPdStruct());
+            dumpProcess.setData(m_inData.pDevice, listRecords, DumpProcess::DT_DUMP_DEVICE_OFFSET, sJsonFileName, dd.getPdStruct());
             dd.start();
             dd.showDialogDelay();
         }
@@ -319,7 +342,7 @@ void XExtractorWidget::dumpToFile()
             DumpProcess dumpProcess;
             XDialogProcess dd(this, &dumpProcess);
             dd.setGlobal(getShortcuts(), getGlobalOptions());
-            dumpProcess.setData(m_pDevice, record, DumpProcess::DT_DUMP_DEVICE_OFFSET, dd.getPdStruct());
+            dumpProcess.setData(m_inData.pDevice, record, DumpProcess::DT_DUMP_DEVICE_OFFSET, dd.getPdStruct());
             dd.start();
             dd.showDialogDelay();
         }
