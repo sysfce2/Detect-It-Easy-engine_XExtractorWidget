@@ -153,6 +153,10 @@ void XExtractorWidget::reload()
 
     ui->labelSize->setText(XBinary::valueToHexEx(m_inData.pDevice->size()));
 
+    // Detach any live result model before the reset below and the worker mutate
+    // m_extractor_data.listRecords, which a previous model still points at (UAF on re-scan).
+    ui->tableViewResult->clear();
+
     m_extractor_data = {};
 
     QList<QVariant> listFlags = ui->comboBoxOptions->getCustomFlags();
