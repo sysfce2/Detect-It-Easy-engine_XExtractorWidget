@@ -41,6 +41,9 @@ XExtractorWidget::XExtractorWidget(QWidget *pParent) : XShortcutsWidget(pParent)
     ui->labelSize->setToolTip(tr("Size"));
     ui->comboBoxExtractorMode->setToolTip(tr("Mode"));
 
+    // Explicit connect: toggled(bool) exists on both Qt5 and Qt6 (checkStateChanged is Qt 6.7+ only)
+    connect(ui->checkBoxAllTypes, SIGNAL(toggled(bool)), this, SLOT(onCheckBoxAllTypesToggled(bool)));
+
     m_inData = {};
     m_pXInfoDB = nullptr;
     m_options = {};
@@ -59,6 +62,13 @@ void XExtractorWidget::setData(const XBinary::INDATA &inData, XInfoDB *pXInfoDB,
     XFormats::removeDevice(m_inData.pDevice, m_inData);
     m_inData = inData;
     m_inData.pDevice = XFormats::createDevice(inData);
+
+    if (m_pXInfoDB == pXInfoDB) {
+        _removeBookmarks();  // Same DB reused: drop the bookmarks of the previous scan
+    } else {
+        m_listBookmarkUUIDs.clear();  // Bookmarks belong to the previous DB
+    }
+
     m_pXInfoDB = pXInfoDB;
     m_options = options;
 
@@ -143,8 +153,16 @@ QIODevice *XExtractorWidget::getDevice()
 
 void XExtractorWidget::setXInfoDB(XInfoDB *pXInfoDB)
 {
+    if (m_pXInfoDB != pXInfoDB) {
+        m_listBookmarkUUIDs.clear();  // Bookmarks belong to the previous DB
+    }
+
     m_pXInfoDB = pXInfoDB;
     ui->widgetHex->setXInfoDB(pXInfoDB);
+
+    if (m_pXInfoDB && m_listBookmarkUUIDs.isEmpty()) {
+        _addBookmarks();  // The (auto) scan may have run before the DB was attached
+    }
 }
 
 void XExtractorWidget::reload()
@@ -156,6 +174,8 @@ void XExtractorWidget::reload()
     // Detach any live result model before the reset below and the worker mutate
     // m_extractor_data.listRecords, which a previous model still points at (UAF on re-scan).
     ui->tableViewResult->clear();
+
+    _removeBookmarks();  // Do not accumulate the bookmarks of previous scans
 
     m_extractor_data = {};
 
@@ -169,6 +189,7 @@ void XExtractorWidget::reload()
 
     m_extractor_data.options.fileType = (XBinary::FT)(ui->comboBoxType->currentData().toULongLong());
     m_extractor_data.options.bDeepScan = ui->checkBoxDeepScan->isChecked();
+    m_extractor_data.options.bAllTypes = ui->checkBoxAllTypes->isChecked();
     m_extractor_data.options.bAnalyze = true;
     m_extractor_data.options.emode = (XExtractor::EMODE)(ui->comboBoxExtractorMode->currentData().toInt());
     // extractor_data.options.bHeuristicScan = ui->checkBoxHeuristicScan->isChecked();
@@ -191,37 +212,59 @@ void XExtractorWidget::reload()
         connect(ui->tableViewResult->selectionModel(), SIGNAL(selectionChanged(QItemSelection, QItemSelection)), this,
                 SLOT(on_tableViewSelection(QItemSelection, QItemSelection)));
 
-        if (m_pXInfoDB) {
-            qint32 nNumberOfRecords = m_extractor_data.listRecords.count();
+        _addBookmarks();
+    }
+}
 
-            for (qint32 i = 0; i < nNumberOfRecords; i++) {
-                bool bAdd = true;
+void XExtractorWidget::_addBookmarks()
+{
+    if (m_pXInfoDB) {
+        qint32 nNumberOfRecords = m_extractor_data.listRecords.count();
 
-                if ((m_extractor_data.listRecords.at(i).nOffset == 0) &&
-                    ((XBinary::FT)(ui->comboBoxType->currentData().toULongLong()) == m_extractor_data.listRecords.at(i).fileType)) {
-                    bAdd = false;
-                }
+        for (qint32 i = 0; i < nNumberOfRecords; i++) {
+            bool bAdd = true;
 
-                if (bAdd) {
-                    QString sComment = m_extractor_data.listRecords.at(i).sString;
-
-                    XInfoDB::BOOKMARKRECORD record = {};
-                    record.sUUID = XBinary::generateUUID();
-                    record.sColorBackground = QColor(Qt::yellow).name();
-                    record.nLocation = m_extractor_data.listRecords.at(i).nOffset;
-                    record.locationType = XBinary::LT_OFFSET;
-                    record.nSize = m_extractor_data.listRecords.at(i).nSize;
-                    record.sComment = sComment;
-
-                    m_pXInfoDB->_addBookmarkRecord(record);
-                }
+            if ((m_extractor_data.listRecords.at(i).nOffset == 0) &&
+                ((XBinary::FT)(ui->comboBoxType->currentData().toULongLong()) == m_extractor_data.listRecords.at(i).fileType)) {
+                bAdd = false;
             }
 
-            if (nNumberOfRecords) {
-                m_pXInfoDB->reloadView();
+            if (bAdd) {
+                QString sComment = m_extractor_data.listRecords.at(i).sString;
+
+                XInfoDB::BOOKMARKRECORD record = {};
+                record.sUUID = XBinary::generateUUID();
+                record.sColorBackground = QColor(Qt::yellow).name();
+                record.nLocation = m_extractor_data.listRecords.at(i).nOffset;
+                record.locationType = XBinary::LT_OFFSET;
+                record.nSize = m_extractor_data.listRecords.at(i).nSize;
+                record.sComment = sComment;
+
+                m_listBookmarkUUIDs.append(m_pXInfoDB->_addBookmarkRecord(record));
             }
         }
+
+        if (nNumberOfRecords) {
+            m_pXInfoDB->reloadView();
+        }
     }
+}
+
+void XExtractorWidget::_removeBookmarks()
+{
+    if (m_pXInfoDB) {
+        qint32 nNumberOfRecords = m_listBookmarkUUIDs.count();
+
+        for (qint32 i = 0; i < nNumberOfRecords; i++) {
+            m_pXInfoDB->_removeBookmarkRecord(m_listBookmarkUUIDs.at(i));
+        }
+
+        if (nNumberOfRecords) {
+            m_pXInfoDB->reloadView();
+        }
+    }
+
+    m_listBookmarkUUIDs.clear();
 }
 
 DumpProcess::RECORD XExtractorWidget::getDumpProcessRecord(QModelIndex index)
@@ -279,16 +322,22 @@ void XExtractorWidget::on_toolButtonSave_clicked()
 
 void XExtractorWidget::on_toolButtonDumpAll_clicked()
 {
+    QAbstractItemModel *pModel = ui->tableViewResult->model();
+
+    if (!pModel) {
+        return;  // No result model: the scan was cancelled/failed or the device could not be opened
+    }
+
     QString sDirectory = QFileDialog::getExistingDirectory(this, tr("Dump all"), XBinary::getDeviceDirectory(m_inData.pDevice));
 
     if (!sDirectory.isEmpty()) {
-        qint32 nNumberOfRecords = ui->tableViewResult->model()->rowCount();
+        qint32 nNumberOfRecords = pModel->rowCount();
 
         if (nNumberOfRecords) {
             QList<DumpProcess::RECORD> listRecords;
 
             for (qint32 i = 0; i < nNumberOfRecords; i++) {
-                QModelIndex index = ui->tableViewResult->model()->index(i, 0);
+                QModelIndex index = pModel->index(i, 0);
 
                 DumpProcess::RECORD record = getDumpProcessRecord(index);
 
@@ -427,9 +476,8 @@ void XExtractorWidget::on_comboBoxExtractorMode_currentIndexChanged(int index)
     // TODO
 }
 
-void XExtractorWidget::on_checkBoxAllTypes_checkStateChanged(const Qt::CheckState &checkState)
+void XExtractorWidget::onCheckBoxAllTypesToggled(bool bChecked)
 {
-    Q_UNUSED(checkState)
-
-    ui->comboBoxType->setEnabled(!ui->checkBoxAllTypes->isChecked());
+    // bAllTypes: every extractable file type is scanned, so the per-type selection is irrelevant
+    ui->comboBoxOptions->setEnabled(!bChecked);
 }

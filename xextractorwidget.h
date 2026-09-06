@@ -62,10 +62,14 @@ private slots:
     void on_tableViewResult_clicked(const QModelIndex &index);
     void on_tableViewSelection(const QItemSelection &itemSelected, const QItemSelection &itemDeselected);
     void on_comboBoxExtractorMode_currentIndexChanged(int index);
-    void on_checkBoxAllTypes_checkStateChanged(const Qt::CheckState &checkState);
+    void onCheckBoxAllTypesToggled(bool bChecked);
 
 protected:
     virtual void registerShortcuts(bool bState);
+
+private:
+    void _addBookmarks();
+    void _removeBookmarks();
 
 private:
     Ui::XExtractorWidget *ui;
@@ -73,6 +77,7 @@ private:
     XInfoDB *m_pXInfoDB;
     XExtractor::OPTIONS m_options;
     XExtractor::DATA m_extractor_data;
+    QList<QString> m_listBookmarkUUIDs;
 };
 
 #endif  // XEXTRACTORWIDGET_H
